@@ -15,12 +15,21 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const isVercel = process.env.VERCEL === '1' || process.env.VERCEL === 'true' || !!process.env.VERCEL;
 
 // Khởi tạo Telegram Bot (chỉ bật polling khi không chạy trên Vercel)
-const bot = new TelegramBot(TELEGRAM_TOKEN, { polling: !isVercel });
+let bot;
+if (TELEGRAM_TOKEN) {
+  bot = new TelegramBot(TELEGRAM_TOKEN, { polling: !isVercel });
+} else {
+  console.warn("WARNING: TELEGRAM_BOT_TOKEN is not defined in environment variables!");
+}
 
 // Kết nối MongoDB
-mongoose.connect(process.env.MONGODB_URI)
-  .then(() => console.log("MongoDB Connected"))
-  .catch(err => console.log("MongoDB Error:", err));
+if (process.env.MONGODB_URI) {
+  mongoose.connect(process.env.MONGODB_URI)
+    .then(() => console.log("MongoDB Connected"))
+    .catch(err => console.log("MongoDB Error:", err));
+} else {
+  console.warn("WARNING: MONGODB_URI is not defined in environment variables!");
+}
 
 // Schema lưu Token Đăng Nhập
 const LoginTokenSchema = new mongoose.Schema({
@@ -65,51 +74,55 @@ const OrderSchema = new mongoose.Schema({
 const Order = mongoose.model('Order', OrderSchema);
 
 // Bot lắng nghe lệnh /start TOKEN_123
-bot.onText(/\/start (.+)/, async (msg, match) => {
-  const chatId = msg.chat.id;
-  const token = match[1]; // Lấy token từ message
+if (bot) {
+  bot.onText(/\/start (.+)/, async (msg, match) => {
+    const chatId = msg.chat.id;
+    const token = match[1]; // Lấy token từ message
 
-  try {
-    // Tìm token trong DB
-    const loginToken = await LoginToken.findOne({ token });
-    
-    if (loginToken) {
-      if (loginToken.isVerified) {
-        return bot.sendMessage(chatId, "Token này đã được sử dụng rồi.");
+    try {
+      // Tìm token trong DB
+      const loginToken = await LoginToken.findOne({ token });
+      
+      if (loginToken) {
+        if (loginToken.isVerified) {
+          return bot.sendMessage(chatId, "Token này đã được sử dụng rồi.");
+        }
+
+        // Cập nhật thông tin khách hàng vào token
+        loginToken.isVerified = true;
+        loginToken.telegramId = msg.from.id.toString();
+        loginToken.firstName = msg.from.first_name;
+        loginToken.username = msg.from.username || '';
+        await loginToken.save();
+
+        // Lưu luôn vào DB User chính thức
+        let user = await User.findOne({ telegramId: loginToken.telegramId });
+        if (!user) {
+          user = new User({
+            telegramId: loginToken.telegramId,
+            firstName: loginToken.firstName,
+            username: loginToken.username,
+          });
+          await user.save();
+        }
+
+        bot.sendMessage(chatId, `Chào mừng ${msg.from.first_name}!\nBạn đã đăng nhập thành công vào ứng dụng Đổi Quà Loto. Vui lòng quay lại ứng dụng.`);
+      } else {
+        bot.sendMessage(chatId, "Mã đăng nhập không hợp lệ hoặc đã hết hạn.");
       }
-
-      // Cập nhật thông tin khách hàng vào token
-      loginToken.isVerified = true;
-      loginToken.telegramId = msg.from.id.toString();
-      loginToken.firstName = msg.from.first_name;
-      loginToken.username = msg.from.username || '';
-      await loginToken.save();
-
-      // Lưu luôn vào DB User chính thức
-      let user = await User.findOne({ telegramId: loginToken.telegramId });
-      if (!user) {
-        user = new User({
-          telegramId: loginToken.telegramId,
-          firstName: loginToken.firstName,
-          username: loginToken.username,
-        });
-        await user.save();
-      }
-
-      bot.sendMessage(chatId, `Chào mừng ${msg.from.first_name}!\nBạn đã đăng nhập thành công vào ứng dụng Đổi Quà Loto. Vui lòng quay lại ứng dụng.`);
-    } else {
-      bot.sendMessage(chatId, "Mã đăng nhập không hợp lệ hoặc đã hết hạn.");
+    } catch (error) {
+      console.error(error);
+      bot.sendMessage(chatId, "Đã có lỗi xảy ra, vui lòng thử lại sau.");
     }
-  } catch (error) {
-    console.error(error);
-    bot.sendMessage(chatId, "Đã có lỗi xảy ra, vui lòng thử lại sau.");
-  }
-});
+  });
+}
 
 // API nhận webhook từ Telegram
 app.post('/api/telegram-webhook', async (req, res) => {
   try {
-    bot.processUpdate(req.body);
+    if (bot) {
+      bot.processUpdate(req.body);
+    }
     res.sendStatus(200);
   } catch (error) {
     console.error("Webhook processing error:", error);
@@ -123,6 +136,9 @@ app.get('/api/telegram-setup', async (req, res) => {
   const protocol = req.headers['x-forwarded-proto'] || 'https';
   const url = `${protocol}://${host}/api/telegram-webhook`;
   try {
+    if (!bot) {
+      return res.status(400).json({ success: false, error: "Telegram Bot is not configured (missing token)." });
+    }
     await bot.setWebHook(url);
     res.json({ success: true, message: `Webhook has been set to: ${url}` });
   } catch (error) {
@@ -201,7 +217,9 @@ app.post('/api/orders', async (req, res) => {
     await order.save();
 
     // Báo Telegram cho khách
-    bot.sendMessage(user.telegramId, `🎉 Chúc mừng! Bạn vừa đổi thành công quà: ${gift.name}.\nĐơn của bạn đang được hệ thống xử lý.`);
+    if (bot) {
+      bot.sendMessage(user.telegramId, `🎉 Chúc mừng! Bạn vừa đổi thành công quà: ${gift.name}.\nĐơn của bạn đang được hệ thống xử lý.`);
+    }
 
     res.json({ success: true, message: "Đổi quà thành công" });
   } catch (error) {
@@ -293,7 +311,9 @@ app.put('/api/users/:id/points', async (req, res) => {
     
     // Nếu điểm thay đổi, báo Telegram
     if (points !== undefined && points > user.points) {
-       bot.sendMessage(user.telegramId, `💰 Bạn vừa được cộng ${points - user.points} điểm từ hệ thống. Tổng điểm hiện tại: ${points}`);
+       if (bot) {
+         bot.sendMessage(user.telegramId, `💰 Bạn vừa được cộng ${points - user.points} điểm từ hệ thống. Tổng điểm hiện tại: ${points}`);
+       }
     }
     
     if (points !== undefined) user.points = points;
@@ -320,7 +340,9 @@ app.put('/api/orders/:id/status', async (req, res) => {
     await order.save();
 
     if (status === 'COMPLETED') {
-       bot.sendMessage(order.user.telegramId, `🎁 Đơn đổi quà "${order.gift.name}" của bạn đã được xử lý thành công!`);
+       if (bot) {
+         bot.sendMessage(order.user.telegramId, `🎁 Đơn đổi quà "${order.gift.name}" của bạn đã được xử lý thành công!`);
+       }
     }
 
     res.json({ success: true, order });
@@ -330,3 +352,5 @@ app.put('/api/orders/:id/status', async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
+
+module.exports = app;
