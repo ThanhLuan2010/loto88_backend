@@ -8,6 +8,61 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Kết nối MongoDB (Hỗ trợ Serverless Vercel)
+let isConnecting = null;
+const connectDb = async () => {
+  if (mongoose.connection.readyState === 1) {
+    return;
+  }
+
+  // Nếu đang trong quá trình kết nối, đợi kết nối hoàn thành
+  if (mongoose.connection.readyState === 2) {
+    await new Promise((resolve) => {
+      const interval = setInterval(() => {
+        if (mongoose.connection.readyState === 1) {
+          clearInterval(interval);
+          resolve();
+        }
+      }, 50);
+    });
+    return;
+  }
+
+  if (process.env.MONGODB_URI) {
+    if (!isConnecting) {
+      isConnecting = mongoose.connect(process.env.MONGODB_URI)
+        .then((m) => {
+          console.log("MongoDB Connected");
+          isConnecting = null;
+          return m;
+        })
+        .catch(err => {
+          console.log("MongoDB Error:", err);
+          isConnecting = null;
+          throw err;
+        });
+    }
+    await isConnecting;
+  } else {
+    console.warn("WARNING: MONGODB_URI is not defined in environment variables!");
+  }
+};
+
+// Khởi tạo kết nối ban đầu
+connectDb().catch(() => {});
+
+// Middleware đảm bảo kết nối DB trước khi xử lý request
+const ensureDbConnected = async (req, res, next) => {
+  try {
+    await connectDb();
+    next();
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Lỗi kết nối cơ sở dữ liệu: " + error.message });
+  }
+};
+
+app.use(ensureDbConnected);
+
 const PORT = process.env.PORT || 3000;
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 
@@ -22,14 +77,7 @@ if (TELEGRAM_TOKEN) {
   console.warn("WARNING: TELEGRAM_BOT_TOKEN is not defined in environment variables!");
 }
 
-// Kết nối MongoDB
-if (process.env.MONGODB_URI) {
-  mongoose.connect(process.env.MONGODB_URI)
-    .then(() => console.log("MongoDB Connected"))
-    .catch(err => console.log("MongoDB Error:", err));
-} else {
-  console.warn("WARNING: MONGODB_URI is not defined in environment variables!");
-}
+// Kết nối MongoDB được quản lý qua middleware ensureDbConnected ở trên
 
 // Schema lưu Token Đăng Nhập
 const LoginTokenSchema = new mongoose.Schema({
@@ -148,10 +196,7 @@ app.get('/api/telegram-setup', async (req, res) => {
 
 // API cho Mobile App gọi để lấy Token mới
 app.get('/api/auth/generate-token', async (req, res) => {
-  // Tránh tình trạng treo App do MongoDB chưa kết nối
-  if (mongoose.connection.readyState !== 1) {
-    return res.status(500).json({ success: false, message: "Lỗi Backend: MongoDB chưa được kết nối." });
-  }
+
 
   const token = "LOTO_" + Math.random().toString(36).substr(2, 9).toUpperCase();
   try {
