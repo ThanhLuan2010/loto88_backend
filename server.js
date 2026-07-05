@@ -137,6 +137,54 @@ const OrderSchema = new mongoose.Schema({
 });
 const Order = mongoose.model('Order', OrderSchema);
 
+// Schema Cấu hình Admin
+const AdminSettingSchema = new mongoose.Schema({
+  key: { type: String, unique: true },
+  value: String
+});
+const AdminSetting = mongoose.model('AdminSetting', AdminSettingSchema);
+
+// Schema Kết quả xổ số hàng ngày (LotteryResult)
+const LotteryResultSchema = new mongoose.Schema({
+  date: String,
+  region: String,
+  provinces: String,
+  videoUrls: String,
+  db: String,
+  g1: String,
+  g2: String,
+  g3: String,
+  g4: String,
+  g5: String,
+  g6: String,
+  g7: String,
+  g8: String
+});
+LotteryResultSchema.index({ date: 1, region: 1 }, { unique: true });
+const LotteryResult = mongoose.model('LotteryResult', LotteryResultSchema);
+
+// Schema Đặc Biệt Năm (DbNam)
+const DbNamSchema = new mongoose.Schema({
+  date: { type: String, unique: true },
+  number: String
+});
+const DbNam = mongoose.model('DbNam', DbNamSchema);
+
+// Schema Giải Nhất Năm (G1Nam)
+const G1NamSchema = new mongoose.Schema({
+  date: { type: String, unique: true },
+  number: String
+});
+const G1Nam = mongoose.model('G1Nam', G1NamSchema);
+
+// Schema Tần Suất Lô Tô (LoTo)
+const LoToSchema = new mongoose.Schema({
+  number: { type: String, unique: true },
+  count: Number,
+  lastSeen: Number
+});
+const LoTo = mongoose.model('LoTo', LoToSchema);
+
 // Bot lắng nghe lệnh /start TOKEN_123
 if (bot) {
   bot.onText(/\/start (.+)/, async (msg, match) => {
@@ -442,6 +490,177 @@ app.put('/api/orders/:id/status', async (req, res) => {
   } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 });
 
+app.post('/api/admin/login', async (req, res) => {
+  const { pinCode } = req.body;
+  try {
+    let pinSetting = await AdminSetting.findOne({ key: 'admin_pin' });
+    if (!pinSetting) {
+      pinSetting = new AdminSetting({ key: 'admin_pin', value: 'admin888' });
+      await pinSetting.save();
+    }
+    if (pinCode === pinSetting.value) {
+      res.json({ success: true, message: "Đăng nhập thành công" });
+    } else {
+      res.status(401).json({ success: false, message: "Mã PIN bảo mật không chính xác!" });
+    }
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Lỗi máy chủ: " + error.message });
+  }
+});
+
+app.post('/api/admin/change-pin', async (req, res) => {
+  const { currentPin, newPin } = req.body;
+  try {
+    let pinSetting = await AdminSetting.findOne({ key: 'admin_pin' });
+    if (!pinSetting) {
+      pinSetting = new AdminSetting({ key: 'admin_pin', value: 'admin888' });
+      await pinSetting.save();
+    }
+    if (currentPin !== pinSetting.value) {
+      return res.status(400).json({ success: false, message: "Mã PIN hiện tại không chính xác!" });
+    }
+    pinSetting.value = newPin;
+    await pinSetting.save();
+    res.json({ success: true, message: "Thay đổi mã PIN thành công!" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Lỗi máy chủ: " + error.message });
+  }
+});
+app.get('/api/results/all', async (req, res) => {
+  try {
+    const [results, dbNamList, g1NamList, loToList] = await Promise.all([
+      LotteryResult.find(),
+      DbNam.find(),
+      G1Nam.find(),
+      LoTo.find()
+    ]);
+
+    // Format results
+    const resultsObj = {};
+    results.forEach(r => {
+      if (!resultsObj[r.date]) resultsObj[r.date] = {};
+      resultsObj[r.date][r.region] = {
+        db: r.db || "",
+        g1: r.g1 || "",
+        g2: r.g2 || "",
+        g3: r.g3 || "",
+        g4: r.g4 || "",
+        g5: r.g5 || "",
+        g6: r.g6 || "",
+        g7: r.g7 || "",
+        g8: r.g8 || "",
+        provinces: r.provinces || "",
+        videoUrls: r.videoUrls || ""
+      };
+    });
+
+    // Format db_nam
+    const dbNamObj = {};
+    dbNamList.forEach(item => {
+      dbNamObj[item.date] = item.number;
+    });
+
+    // Format g1_nam
+    const g1NamObj = {};
+    g1NamList.forEach(item => {
+      g1NamObj[item.date] = item.number;
+    });
+
+    // Format lo_to
+    const loToObj = {};
+    loToList.forEach(item => {
+      loToObj[item.number] = {
+        count: item.count,
+        lastSeen: item.lastSeen
+      };
+    });
+
+    res.json({
+      success: true,
+      results: resultsObj,
+      db_nam: dbNamObj,
+      g1_nam: g1NamObj,
+      lo_to: loToObj
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.post('/api/results/sync', async (req, res) => {
+  const { results, db_nam, g1_nam, lo_to } = req.body;
+  try {
+    // 1. Process Results
+    if (results) {
+      const resultsDocs = [];
+      Object.keys(results).forEach(date => {
+        Object.keys(results[date]).forEach(region => {
+          const r = results[date][region];
+          resultsDocs.push({
+            date,
+            region,
+            provinces: r.provinces || "",
+            videoUrls: r.videoUrls || "",
+            db: r.db || "",
+            g1: r.g1 || "",
+            g2: r.g2 || "",
+            g3: r.g3 || "",
+            g4: r.g4 || "",
+            g5: r.g5 || "",
+            g6: r.g6 || "",
+            g7: r.g7 || "",
+            g8: r.g8 || ""
+          });
+        });
+      });
+      await LotteryResult.deleteMany({});
+      if (resultsDocs.length > 0) {
+        await LotteryResult.insertMany(resultsDocs);
+      }
+    }
+
+    // 2. Process DbNam
+    if (db_nam) {
+      const dbNamDocs = Object.keys(db_nam).map(date => ({
+        date,
+        number: db_nam[date].toString()
+      }));
+      await DbNam.deleteMany({});
+      if (dbNamDocs.length > 0) {
+        await DbNam.insertMany(dbNamDocs);
+      }
+    }
+
+    // 3. Process G1Nam
+    if (g1_nam) {
+      const g1NamDocs = Object.keys(g1_nam).map(date => ({
+        date,
+        number: g1_nam[date].toString()
+      }));
+      await G1Nam.deleteMany({});
+      if (g1NamDocs.length > 0) {
+        await G1Nam.insertMany(g1NamDocs);
+      }
+    }
+
+    // 4. Process LoTo
+    if (lo_to) {
+      const loToDocs = Object.keys(lo_to).map(numStr => ({
+        number: numStr,
+        count: Number(lo_to[numStr].count) || 0,
+        lastSeen: Number(lo_to[numStr].lastSeen) || 0
+      }));
+      await LoTo.deleteMany({});
+      if (loToDocs.length > 0) {
+        await LoTo.insertMany(loToDocs);
+      }
+    }
+
+    res.json({ success: true, message: "Đồng bộ dữ liệu thành công!" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Lỗi đồng bộ dữ liệu: " + error.message });
+  }
+});
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
