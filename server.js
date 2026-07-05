@@ -69,10 +69,26 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 // Kiểm tra môi trường Vercel
 const isVercel = process.env.VERCEL === '1' || process.env.VERCEL === 'true' || !!process.env.VERCEL;
 
-// Khởi tạo Telegram Bot (chỉ bật polling khi không chạy trên Vercel)
+// Khởi tạo Telegram Bot
 let bot;
 if (TELEGRAM_TOKEN) {
-  bot = new TelegramBot(TELEGRAM_TOKEN, { polling: !isVercel });
+  // Xác định xem có bật polling hay không:
+  // 1. Ưu tiên cấu hình TELEGRAM_POLLING từ environment variable ('true' -> bật, 'false' -> tắt).
+  // 2. Nếu không cấu hình: bật polling khi chạy ở local (không phải Vercel và không phải production).
+  let shouldPoll = false;
+  if (process.env.TELEGRAM_POLLING !== undefined) {
+    shouldPoll = process.env.TELEGRAM_POLLING === 'true';
+  } else {
+    shouldPoll = !isVercel && process.env.NODE_ENV !== 'production';
+  }
+
+  bot = new TelegramBot(TELEGRAM_TOKEN, { polling: shouldPoll });
+  
+  if (shouldPoll) {
+    console.log("Telegram Bot started in POLLING mode");
+  } else {
+    console.log("Telegram Bot started in WEBHOOK/API mode (polling disabled)");
+  }
 } else {
   console.warn("WARNING: TELEGRAM_BOT_TOKEN is not defined in environment variables!");
 }
@@ -180,13 +196,45 @@ app.post('/api/telegram-webhook', async (req, res) => {
 
 // API hỗ trợ tự động thiết lập Webhook URL với Telegram
 app.get('/api/telegram-setup', async (req, res) => {
-  const host = req.headers.host;
-  const protocol = req.headers['x-forwarded-proto'] || 'https';
-  const url = `${protocol}://${host}/api/telegram-webhook`;
+  let url = process.env.WEBHOOK_URL;
+  
+  if (!url) {
+    const host = req.headers.host;
+    const protocol = req.headers['x-forwarded-proto'] || 'https';
+    url = `${protocol}://${host}/api/telegram-webhook`;
+  }
+
   try {
     if (!bot) {
       return res.status(400).json({ success: false, error: "Telegram Bot is not configured (missing token)." });
     }
+
+    // Kiểm tra tính hợp lệ của URL đối với Telegram Webhook
+    try {
+      const parsedUrl = new URL(url);
+      const port = parsedUrl.port;
+      const hostname = parsedUrl.hostname;
+      
+      const allowedPorts = ['', '80', '88', '443', '8443'];
+      if (!allowedPorts.includes(port)) {
+        return res.status(400).json({ 
+          success: false, 
+          error: `Telegram webhook only allows ports 80, 88, 443, or 8443. Currently using port: '${port}'.`,
+          suggestion: "If you are running locally, use ngrok or cloudflared to create a public HTTPS tunnel, and access this setup API via the public tunnel URL."
+        });
+      }
+      
+      if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        return res.status(400).json({
+          success: false,
+          error: "Telegram cannot send webhooks to localhost/127.0.0.1.",
+          suggestion: "Please use a public URL (like ngrok, cloudflare tunnel, or deployment URL) to setup the webhook."
+        });
+      }
+    } catch (urlError) {
+      return res.status(400).json({ success: false, error: `Invalid URL format: ${url}` });
+    }
+
     await bot.setWebHook(url);
     res.json({ success: true, message: `Webhook has been set to: ${url}` });
   } catch (error) {
