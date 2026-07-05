@@ -533,6 +533,81 @@ app.get('/api/db-debug', (req, res) => {
   });
 });
 
+app.post('/api/admin/migrate-data', async (req, res) => {
+  const { results, db_nam, g1_nam, lo_to } = req.body;
+  try {
+    // 1. Process Results
+    if (results) {
+      const resultsDocs = [];
+      Object.keys(results).forEach(date => {
+        Object.keys(results[date]).forEach(region => {
+          const r = results[date][region];
+          resultsDocs.push({
+            date,
+            region,
+            provinces: r.provinces || "",
+            videoUrls: r.videoUrls || "",
+            db: r.db || "",
+            g1: r.g1 || "",
+            g2: r.g2 || "",
+            g3: r.g3 || "",
+            g4: r.g4 || "",
+            g5: r.g5 || "",
+            g6: r.g6 || "",
+            g7: r.g7 || "",
+            g8: r.g8 || ""
+          });
+        });
+      });
+      await LotteryResult.deleteMany({});
+      if (resultsDocs.length > 0) {
+        await LotteryResult.insertMany(resultsDocs);
+      }
+    }
+
+    // 2. Process DbNam
+    if (db_nam) {
+      const dbNamDocs = Object.keys(db_nam).map(date => ({
+        date,
+        number: db_nam[date].toString()
+      }));
+      await DbNam.deleteMany({});
+      if (dbNamDocs.length > 0) {
+        await DbNam.insertMany(dbNamDocs);
+      }
+    }
+
+    // 3. Process G1Nam
+    if (g1_nam) {
+      const g1NamDocs = Object.keys(g1_nam).map(date => ({
+        date,
+        number: g1_nam[date].toString()
+      }));
+      await G1Nam.deleteMany({});
+      if (g1NamDocs.length > 0) {
+        await G1Nam.insertMany(g1NamDocs);
+      }
+    }
+
+    // 4. Process LoTo
+    if (lo_to) {
+      const loToDocs = Object.keys(lo_to).map(numStr => ({
+        number: numStr,
+        count: Number(lo_to[numStr].count) || 0,
+        lastSeen: Number(lo_to[numStr].lastSeen) || 0
+      }));
+      await LoTo.deleteMany({});
+      if (loToDocs.length > 0) {
+        await LoTo.insertMany(loToDocs);
+      }
+    }
+
+    res.json({ success: true, message: "Nhập dữ liệu thành công!" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Lỗi nhập dữ liệu: " + error.message });
+  }
+});
+
 app.get('/api/results', async (req, res) => {
   const { date } = req.query;
   if (!date) return res.status(400).json({ success: false, message: "Thiếu tham số date" });
