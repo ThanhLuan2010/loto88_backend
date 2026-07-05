@@ -526,6 +526,13 @@ app.post('/api/admin/change-pin', async (req, res) => {
     res.status(500).json({ success: false, message: "Lỗi máy chủ: " + error.message });
   }
 });
+app.get('/api/db-debug', (req, res) => {
+  res.json({
+    dbName: mongoose.connection.name,
+    uri: process.env.MONGODB_URI ? process.env.MONGODB_URI.replace(/:([^@]+)@/, ':****@') : null
+  });
+});
+
 app.get('/api/results', async (req, res) => {
   const { date } = req.query;
   if (!date) return res.status(400).json({ success: false, message: "Thiếu tham số date" });
