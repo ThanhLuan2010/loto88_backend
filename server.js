@@ -526,16 +526,11 @@ app.post('/api/admin/change-pin', async (req, res) => {
     res.status(500).json({ success: false, message: "Lỗi máy chủ: " + error.message });
   }
 });
-app.get('/api/results/all', async (req, res) => {
+app.get('/api/results', async (req, res) => {
+  const { date } = req.query;
+  if (!date) return res.status(400).json({ success: false, message: "Thiếu tham số date" });
   try {
-    const [results, dbNamList, g1NamList, loToList] = await Promise.all([
-      LotteryResult.find(),
-      DbNam.find(),
-      G1Nam.find(),
-      LoTo.find()
-    ]);
-
-    // Format results
+    const results = await LotteryResult.find({ date });
     const resultsObj = {};
     results.forEach(r => {
       if (!resultsObj[r.date]) resultsObj[r.date] = {};
@@ -553,20 +548,41 @@ app.get('/api/results/all', async (req, res) => {
         videoUrls: r.videoUrls || ""
       };
     });
+    res.json({ success: true, results: resultsObj });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
 
-    // Format db_nam
+app.get('/api/results/year', async (req, res) => {
+  const { year } = req.query;
+  if (!year) return res.status(400).json({ success: false, message: "Thiếu tham số year" });
+  try {
+    const yearRegex = new RegExp('^' + year + '-');
+    const [dbNamList, g1NamList] = await Promise.all([
+      DbNam.find({ date: { $regex: yearRegex } }),
+      G1Nam.find({ date: { $regex: yearRegex } })
+    ]);
+
     const dbNamObj = {};
     dbNamList.forEach(item => {
       dbNamObj[item.date] = item.number;
     });
 
-    // Format g1_nam
     const g1NamObj = {};
     g1NamList.forEach(item => {
       g1NamObj[item.date] = item.number;
     });
 
-    // Format lo_to
+    res.json({ success: true, db_nam: dbNamObj, g1_nam: g1NamObj });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.get('/api/results/loto', async (req, res) => {
+  try {
+    const loToList = await LoTo.find();
     const loToObj = {};
     loToList.forEach(item => {
       loToObj[item.number] = {
@@ -574,14 +590,7 @@ app.get('/api/results/all', async (req, res) => {
         lastSeen: item.lastSeen
       };
     });
-
-    res.json({
-      success: true,
-      results: resultsObj,
-      db_nam: dbNamObj,
-      g1_nam: g1NamObj,
-      lo_to: loToObj
-    });
+    res.json({ success: true, lo_to: loToObj });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -590,69 +599,93 @@ app.get('/api/results/all', async (req, res) => {
 app.post('/api/results/sync', async (req, res) => {
   const { results, db_nam, g1_nam, lo_to } = req.body;
   try {
-    // 1. Process Results
+    // 1. Process Results (upsert)
     if (results) {
-      const resultsDocs = [];
+      const bulkOps = [];
       Object.keys(results).forEach(date => {
         Object.keys(results[date]).forEach(region => {
           const r = results[date][region];
-          resultsDocs.push({
-            date,
-            region,
-            provinces: r.provinces || "",
-            videoUrls: r.videoUrls || "",
-            db: r.db || "",
-            g1: r.g1 || "",
-            g2: r.g2 || "",
-            g3: r.g3 || "",
-            g4: r.g4 || "",
-            g5: r.g5 || "",
-            g6: r.g6 || "",
-            g7: r.g7 || "",
-            g8: r.g8 || ""
+          bulkOps.push({
+            updateOne: {
+              filter: { date, region },
+              update: {
+                $set: {
+                  provinces: r.provinces || "",
+                  videoUrls: r.videoUrls || "",
+                  db: r.db || "",
+                  g1: r.g1 || "",
+                  g2: r.g2 || "",
+                  g3: r.g3 || "",
+                  g4: r.g4 || "",
+                  g5: r.g5 || "",
+                  g6: r.g6 || "",
+                  g7: r.g7 || "",
+                  g8: r.g8 || ""
+                }
+              },
+              upsert: true
+            }
           });
         });
       });
-      await LotteryResult.deleteMany({});
-      if (resultsDocs.length > 0) {
-        await LotteryResult.insertMany(resultsDocs);
+      if (bulkOps.length > 0) {
+        await LotteryResult.bulkWrite(bulkOps);
       }
     }
 
-    // 2. Process DbNam
+    // 2. Process DbNam (upsert)
     if (db_nam) {
-      const dbNamDocs = Object.keys(db_nam).map(date => ({
-        date,
-        number: db_nam[date].toString()
-      }));
-      await DbNam.deleteMany({});
-      if (dbNamDocs.length > 0) {
-        await DbNam.insertMany(dbNamDocs);
+      const bulkOps = [];
+      Object.keys(db_nam).forEach(date => {
+        bulkOps.push({
+          updateOne: {
+            filter: { date },
+            update: { $set: { number: db_nam[date].toString() } },
+            upsert: true
+          }
+        });
+      });
+      if (bulkOps.length > 0) {
+        await DbNam.bulkWrite(bulkOps);
       }
     }
 
-    // 3. Process G1Nam
+    // 3. Process G1Nam (upsert)
     if (g1_nam) {
-      const g1NamDocs = Object.keys(g1_nam).map(date => ({
-        date,
-        number: g1_nam[date].toString()
-      }));
-      await G1Nam.deleteMany({});
-      if (g1NamDocs.length > 0) {
-        await G1Nam.insertMany(g1NamDocs);
+      const bulkOps = [];
+      Object.keys(g1_nam).forEach(date => {
+        bulkOps.push({
+          updateOne: {
+            filter: { date },
+            update: { $set: { number: g1_nam[date].toString() } },
+            upsert: true
+          }
+        });
+      });
+      if (bulkOps.length > 0) {
+        await G1Nam.bulkWrite(bulkOps);
       }
     }
 
-    // 4. Process LoTo
+    // 4. Process LoTo (upsert)
     if (lo_to) {
-      const loToDocs = Object.keys(lo_to).map(numStr => ({
-        number: numStr,
-        count: Number(lo_to[numStr].count) || 0,
-        lastSeen: Number(lo_to[numStr].lastSeen) || 0
-      }));
-      await LoTo.deleteMany({});
-      if (loToDocs.length > 0) {
-        await LoTo.insertMany(loToDocs);
+      const bulkOps = [];
+      Object.keys(lo_to).forEach(numStr => {
+        bulkOps.push({
+          updateOne: {
+            filter: { number: numStr },
+            update: {
+              $set: {
+                count: Number(lo_to[numStr].count) || 0,
+                lastSeen: Number(lo_to[numStr].lastSeen) || 0
+              }
+            },
+            upsert: true
+          }
+        });
+      });
+      if (bulkOps.length > 0) {
+        await LoTo.bulkWrite(bulkOps);
       }
     }
 
