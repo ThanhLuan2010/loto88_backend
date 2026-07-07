@@ -185,6 +185,16 @@ const LoToSchema = new mongoose.Schema({
 });
 const LoTo = mongoose.model('LoTo', LoToSchema);
 
+// Schema Lượt chơi Minigame Trúng Thưởng
+const MinigameSubmissionSchema = new mongoose.Schema({
+  telegram: { type: String, required: true },
+  type: { type: String, required: true },
+  number: { type: String, default: '' },
+  code: { type: String, default: '' },
+  createdAt: { type: Date, default: Date.now }
+});
+const MinigameSubmission = mongoose.model('MinigameSubmission', MinigameSubmissionSchema);
+
 // Bot lắng nghe lệnh /start TOKEN_123
 if (bot) {
   bot.onText(/\/start (.+)/, async (msg, match) => {
@@ -488,6 +498,47 @@ app.put('/api/orders/:id/status', async (req, res) => {
 
     res.json({ success: true, order });
   } catch (error) { res.status(500).json({ success: false, message: error.message }); }
+});
+
+// API: QUẢN LÝ MINIGAME
+app.post('/api/minigames', async (req, res) => {
+  const { telegram, type, number, code } = req.body;
+  try {
+    if (!telegram || !type) {
+      return res.status(400).json({ success: false, message: "Thiếu thông tin telegram hoặc loại minigame." });
+    }
+    const submission = new MinigameSubmission({
+      telegram,
+      type,
+      number: number || '',
+      code: code || ''
+    });
+    await submission.save();
+    res.json({ success: true, message: "Gửi dự đoán minigame thành công!" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.get('/api/minigames', async (req, res) => {
+  try {
+    const submissions = await MinigameSubmission.find().sort({ createdAt: -1 });
+    res.json({ success: true, submissions });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+app.delete('/api/minigames/:id', async (req, res) => {
+  try {
+    const deleted = await MinigameSubmission.findByIdAndDelete(req.params.id);
+    if (!deleted) {
+      return res.status(404).json({ success: false, message: "Không tìm thấy lượt chơi." });
+    }
+    res.json({ success: true, message: "Xóa lượt chơi minigame thành công!" });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
 });
 
 app.post('/api/admin/login', async (req, res) => {
