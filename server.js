@@ -122,6 +122,7 @@ const GiftSchema = new mongoose.Schema({
   name: String,
   points: Number,
   image: String,
+  category: { type: String, enum: ['VOUCHER', 'E-GIFTS', 'THẺ CÀO', 'NẠP GAME', 'DU LỊCH', 'VÉ MÁY BAY', 'VẬT PHẨM'], default: 'VOUCHER' },
   isActive: { type: Boolean, default: true },
   createdAt: { type: Date, default: Date.now }
 });
@@ -380,7 +381,10 @@ app.post('/api/orders', async (req, res) => {
 
 // API: CMS - QUẢN LÝ QUÀ TẶNG
 app.get('/api/gifts', async (req, res) => {
-  const gifts = await Gift.find().sort({ createdAt: -1 });
+  const { category } = req.query;
+  const filter = {};
+  if (category && category !== 'all') filter.category = category;
+  const gifts = await Gift.find(filter).sort({ createdAt: -1 });
   res.json({ success: true, gifts });
 });
 
