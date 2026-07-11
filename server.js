@@ -381,11 +381,21 @@ app.post('/api/orders', async (req, res) => {
 
 // API: CMS - QUẢN LÝ QUÀ TẶNG
 app.get('/api/gifts', async (req, res) => {
-  const { category } = req.query;
-  const filter = {};
-  if (category && category !== 'all') filter.category = category;
-  const gifts = await Gift.find(filter).sort({ createdAt: -1 });
-  res.json({ success: true, gifts });
+  try {
+    const { category, page, limit } = req.query;
+    const filter = {};
+    if (category && category !== 'all') filter.category = category;
+
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 0)); // 0 = no limit
+
+    const total = await Gift.countDocuments(filter);
+    const query = Gift.find(filter).sort({ createdAt: -1 });
+    if (limitNum > 0) query.skip((pageNum - 1) * limitNum).limit(limitNum);
+
+    const gifts = await query;
+    res.json({ success: true, gifts, total, page: pageNum, limit: limitNum });
+  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 });
 
 app.post('/api/gifts', async (req, res) => {
@@ -481,8 +491,54 @@ app.put('/api/users/:id/points', async (req, res) => {
 
 // API: CMS - QUẢN LÝ ĐƠN ĐỔI QUÀ
 app.get('/api/orders', async (req, res) => {
-  const orders = await Order.find().populate('user').populate('gift').sort({ createdAt: -1 });
-  res.json({ success: true, orders });
+  try {
+    const { status, search, page, limit } = req.query;
+    const pageNum = Math.max(1, parseInt(page) || 1);
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 20));
+
+    // Build user filter for search
+    let userIds = null;
+    if (search && search.trim()) {
+      const regex = new RegExp(search.trim(), 'i');
+      const matchedUsers = await User.find({
+        $or: [
+          { firstName: regex },
+          { username: regex },
+          { telegramId: regex },
+        ]
+      }).select('_id');
+      userIds = matchedUsers.map(u => u._id);
+    }
+
+    // Build order filter
+    const orderFilter = {};
+    if (status && status !== 'ALL') orderFilter.status = status;
+    if (userIds !== null) orderFilter.user = { $in: userIds };
+
+    // Also search gift name if no user matched but search exists
+    // Run parallel: orders matching userIds OR gift name
+    let orders, total;
+    if (search && search.trim() && userIds !== null && userIds.length === 0) {
+      // No users matched – try matching gift name instead
+      const giftRegex = new RegExp(search.trim(), 'i');
+      const matchedGifts = await Gift.find({ name: giftRegex }).select('_id');
+      if (matchedGifts.length > 0) {
+        orderFilter.gift = { $in: matchedGifts.map(g => g._id) };
+        delete orderFilter.user;
+      }
+    }
+
+    total = await Order.countDocuments(orderFilter);
+    orders = await Order.find(orderFilter)
+      .populate('user')
+      .populate('gift')
+      .sort({ createdAt: -1 })
+      .skip((pageNum - 1) * limitNum)
+      .limit(limitNum);
+
+    const totalPages = Math.ceil(total / limitNum);
+    res.json({ success: true, orders, total, page: pageNum, limit: limitNum, totalPages });
+  } catch (error) { res.status(500).json({ success: false, message: error.message }); }
 });
 
 app.put('/api/orders/:id/status', async (req, res) => {
