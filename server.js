@@ -387,7 +387,9 @@ app.get('/api/gifts', async (req, res) => {
     if (category && category !== 'all') filter.category = category;
 
     const pageNum = Math.max(1, parseInt(page) || 1);
-    const limitNum = Math.min(100, Math.max(1, parseInt(limit) || 0)); // 0 = no limit
+    const parsedLimit = parseInt(limit);
+    // 0 hoặc không truyền = không giới hạn; > 0 thì giới hạn tối đa 100
+    const limitNum = (!parsedLimit || parsedLimit <= 0) ? 0 : Math.min(100, parsedLimit);
 
     const total = await Gift.countDocuments(filter);
     const query = Gift.find(filter).sort({ createdAt: -1 });
